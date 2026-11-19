@@ -24,15 +24,19 @@ export function AuthProvider({ children }) {
     setUsuario(datos);
   }
 
+  async function registrarse(datosRegistro) {
+    const { token, usuario: datos } = await api.post('/auth/registro', datosRegistro);
+    sesion.guardar(token);
+    setUsuario(datos);
+  }
+
   function cerrarSesion() {
     sesion.borrar();
     setUsuario(null);
   }
 
-  const esGestor = usuario?.rol === 'ADMIN' || usuario?.rol === 'ALMACEN';
-
   return (
-    <AuthContext.Provider value={{ usuario, cargando, iniciarSesion, cerrarSesion, esGestor }}>
+    <AuthContext.Provider value={{ usuario, cargando, iniciarSesion, registrarse, cerrarSesion }}>
       {children}
     </AuthContext.Provider>
   );

@@ -7,18 +7,19 @@ El sistema es un **monolito modular**: un solo servidor Node.js expone la API RE
 
 ## Funcionalidades
 
-| Módulo | Qué hace |
-|---|---|
-| **Productos e insumos** | Altas, edición, baja lógica y reactivación; categorías; tipo (producto, insumo, material); unidad de medida; stock actual y mínimo; control de disponibilidad; entradas y ajustes de inventario con historial de movimientos. |
-| **Pedidos internos** | Cada empleado registra solicitudes con varios productos indicando sucursal, área y observaciones. Folio automático `SC-AAAA-00001`. |
-| **Seguimiento y entrega** | Flujo de estados **Pendiente → En proceso → Atendido** (o **Rechazado** con motivo). Al marcar *Atendido* se descuenta el inventario automáticamente y se valida que haya existencia suficiente. Historial de cada cambio. |
-| **Usuarios y roles** | **Administración** (todo), **Almacén** (atiende pedidos y gestiona inventario) y **Empleado/Sucursal** (solicita y consulta sus pedidos). Autenticación con JWT. |
-| **Panel de inicio** | Conteo de pedidos por estado, pedidos recientes y productos con stock bajo. |
+El sistema tiene dos perfiles. Cada uno ve solo su propio menú.
+
+| Perfil | Pantallas | Qué puede hacer |
+|---|---|---|
+| **Empleado (sucursal)** | Mis solicitudes | Consulta el catálogo con la existencia disponible, arma una solicitud con varios productos y una nota para el almacén, y sigue cada pedido con su bitácora de estados. No puede pedir más de lo que hay en existencia. Puede crear su propia cuenta desde "Crea tu cuenta". |
+| **Almacén (administrador)** | Pedidos · Inventario | Ve los pedidos de todas las sucursales con una franja de resumen por estado que también funciona como filtro. Los recepciona (**Pendiente → En proceso**), los marca como **Atendidos** (se descuenta el inventario, todo o nada) o los **Rechaza** con un motivo obligatorio. En Inventario da de alta, edita, da de baja (baja lógica) y reactiva productos, y filtra los que tienen stock bajo. |
+
+Reglas principales: los folios son `PED-0001`, `PED-0002`…; las cantidades son enteras y van con su unidad (kilogramo, gramo, litro, mililitro, pieza, paquete, caja, bolsa o botella), y un producto aparece como "Stock bajo" cuando su existencia es igual o menor a su stock mínimo.
 
 ## Tecnologías
 
-- **Backend:** Node.js 20+, Express 5, Sequelize (ORM), PostgreSQL, JWT, bcrypt, Zod
-- **Frontend:** React 19, Vite, React Router, Tailwind CSS 4
+- **Backend:** Node.js 20+, Express 5, Sequelize (ORM), PostgreSQL, JWT, bcrypt, Zod, Helmet y límite de 50 intentos cada 15 minutos en inicio de sesión y registro
+- **Frontend:** React 19, Vite, React Router, Tailwind CSS 4, íconos Lucide y tipografía Geist
 - **Despliegue:** Ubuntu en VM (Azure / IBM Cloud), Nginx como proxy inverso, PM2 como gestor de procesos
 
 ## Estructura
@@ -36,7 +37,7 @@ sede-cafe/
 │   ├── scripts/                # db-init.js (crea tablas) y seed.js (datos demo)
 │   └── .env.example            # Plantilla de variables de entorno
 ├── frontend/
-│   └── src/                    # pages/, components/, context/, api.js
+│   └── src/                    # pages/ (Acceso, empleado/, almacen/), components/, context/, lib/
 ├── deploy/
 │   ├── setup-vm.sh             # Instalación completa en la VM
 │   ├── actualizar.sh           # Actualizar la VM tras un git push
@@ -50,14 +51,13 @@ sede-cafe/
 
 ## Usuarios de demostración
 
-Contraseña para todos: **`SedeCafe2026`**
+Los mismos del documento del proyecto. Se cargan con `npm run db:seed` junto con 20 productos y 4 pedidos de ejemplo.
 
-| Correo | Rol |
-|---|---|
-| admin@sedecafe.com | Administración |
-| almacen@sedecafe.com | Almacén |
-| centro@sedecafe.com | Empleado · Sucursal Centro |
-| norte@sedecafe.com | Empleado · Sucursal Norte |
+| Perfil | Correo | Contraseña |
+|---|---|---|
+| Almacén (administrador) | admin@sedecafe.com | Admin123! |
+| Empleado (Ana Torres, Sucursal 1) | empleado1@sedecafe.com | Empleado123! |
+| Empleado (Luis Ramírez, Sucursal 2) | empleado2@sedecafe.com | Empleado123! |
 
 > Cambia estas contraseñas si el sistema se va a usar con datos reales.
 
@@ -79,7 +79,7 @@ Resumen; el procedimiento con capturas va en el manual de la práctica.
    ```bash
    bash deploy/setup-vm.sh
    ```
-5. Abrir en el navegador `http://IP_PUBLICA` e iniciar sesión con un usuario demo.
+5. Abrir en el navegador `http://IP_PUBLICA` e iniciar sesión con un usuario de demostración.
 6. **Al terminar, detener la VM** desde el portal (botón *Detener*) para que quede *desasignada* y no consuma créditos. La app arranca sola cuando la vuelvas a encender (PM2 está configurado para iniciar con el sistema). Ojo: si la IP pública no es estática, puede cambiar al volver a encender la VM.
 
 Comandos útiles en la VM:
@@ -89,7 +89,8 @@ pm2 status                 # ver si la app está corriendo
 pm2 logs sede-cafe         # ver los registros
 pm2 restart sede-cafe      # reiniciar la app
 curl localhost/api/health  # probar conexión a la base de datos
-bash deploy/actualizar.sh  # traer cambios de GitHub y reiniciar
+bash deploy/actualizar.sh  # traer cambios de GitHub y reiniciar (conserva los datos)
+bash deploy/actualizar.sh --reiniciar-datos  # igual, pero borra la base y carga los datos de demostración
 ```
 
 ---
@@ -127,6 +128,7 @@ Todas las rutas, salvo login y health, requieren el encabezado `Authorization: B
 | Método | Ruta | Rol |
 |---|---|---|
 | POST | `/api/auth/login` | público |
+| POST | `/api/auth/registro` (crea siempre una cuenta de empleado) | público |
 | GET | `/api/auth/me` · PUT `/api/auth/password` | todos |
 | GET | `/api/productos?q=&categoriaId=&tipo=&bajoStock=true` | todos |
 | POST / PUT / DELETE | `/api/productos[/:id]` | Admin, Almacén |
@@ -135,7 +137,7 @@ Todas las rutas, salvo login y health, requieren el encabezado `Authorization: B
 | GET / POST / PUT / DELETE | `/api/categorias[/:id]` | lectura todos · escritura Admin, Almacén |
 | GET / POST | `/api/pedidos` | todos (el empleado solo ve los suyos) |
 | GET | `/api/pedidos/:id` | todos |
-| PATCH | `/api/pedidos/:id/estado` `{ estado, comentario }` | Admin, Almacén |
+| PATCH | `/api/pedidos/:id/estado` `{ estado, comentario }` (descuenta stock al pasar a ATENDIDO) | Admin, Almacén |
 | PATCH | `/api/pedidos/:id/cancelar` | solicitante (si está pendiente) |
 | GET / POST / PUT / PATCH | `/api/usuarios[/:id][/estado]` | Admin |
 | GET / POST / PUT | `/api/sucursales[/:id]` | lectura todos · escritura Admin |

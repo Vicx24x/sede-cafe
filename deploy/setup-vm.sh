@@ -99,5 +99,5 @@ echo
 echo "Prueba local: $(curl -s http://localhost/api/health || echo 'sin respuesta')"
 echo
 echo -e "\033[1;32m¡Listo! Abre en tu navegador:  http://${IP_PUBLICA}\033[0m"
-echo "Usuarios demo (contraseña SedeCafe2026): admin@sedecafe.com, almacen@sedecafe.com, centro@sedecafe.com"
+echo "Almacén: admin@sedecafe.com / Admin123!   Empleados: empleado1@sedecafe.com y empleado2@sedecafe.com / Empleado123!"
 echo "Recuerda abrir el puerto 80 (HTTP) en el grupo de seguridad de red de la VM."

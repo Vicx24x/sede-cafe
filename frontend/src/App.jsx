@@ -1,40 +1,40 @@
 import { Navigate, Route, Routes } from 'react-router';
 import { useAuth } from './context/AuthContext';
+import { esAlmacen } from './lib/formato';
 import Layout from './components/Layout';
 import { Cargando } from './components/ui';
-import Login from './pages/Login';
-import Inicio from './pages/Inicio';
-import Productos from './pages/Productos';
-import Categorias from './pages/Categorias';
-import Pedidos from './pages/Pedidos';
-import NuevoPedido from './pages/NuevoPedido';
-import PedidoDetalle from './pages/PedidoDetalle';
-import Usuarios from './pages/Usuarios';
-import Sucursales from './pages/Sucursales';
+import { Login, Registro } from './pages/Acceso';
+import MisSolicitudes from './pages/empleado/MisSolicitudes';
+import Pedidos from './pages/almacen/Pedidos';
+import Inventario from './pages/almacen/Inventario';
 
-// Protege rutas: requiere sesión y, opcionalmente, ciertos roles
-function Protegida({ roles, children }) {
+// Requiere sesión y, si se indica, el perfil de almacén
+function Protegida({ almacen = false, children }) {
   const { usuario, cargando } = useAuth();
   if (cargando) return <Cargando />;
   if (!usuario) return <Navigate to="/login" replace />;
-  if (roles && !roles.includes(usuario.rol)) return <Navigate to="/" replace />;
+  if (almacen && !esAlmacen(usuario)) return <Navigate to="/" replace />;
   return children;
 }
 
-export default function App() {
+// Página de inicio según el perfil: el empleado ve sus solicitudes y el almacén los pedidos
+function Inicio() {
   const { usuario } = useAuth();
+  return esAlmacen(usuario) ? <Navigate to="/pedidos" replace /> : <MisSolicitudes />;
+}
+
+export default function App() {
+  const { usuario, cargando } = useAuth();
+  if (cargando) return <Cargando />;
+
   return (
     <Routes>
       <Route path="/login" element={usuario ? <Navigate to="/" replace /> : <Login />} />
+      <Route path="/registro" element={usuario ? <Navigate to="/" replace /> : <Registro />} />
       <Route element={<Protegida><Layout /></Protegida>}>
         <Route index element={<Inicio />} />
-        <Route path="productos" element={<Productos />} />
-        <Route path="categorias" element={<Protegida roles={['ADMIN', 'ALMACEN']}><Categorias /></Protegida>} />
-        <Route path="pedidos" element={<Pedidos />} />
-        <Route path="pedidos/nuevo" element={<NuevoPedido />} />
-        <Route path="pedidos/:id" element={<PedidoDetalle />} />
-        <Route path="usuarios" element={<Protegida roles={['ADMIN']}><Usuarios /></Protegida>} />
-        <Route path="sucursales" element={<Protegida roles={['ADMIN']}><Sucursales /></Protegida>} />
+        <Route path="pedidos" element={<Protegida almacen><Pedidos /></Protegida>} />
+        <Route path="inventario" element={<Protegida almacen><Inventario /></Protegida>} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

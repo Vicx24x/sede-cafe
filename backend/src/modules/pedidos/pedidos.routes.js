@@ -6,6 +6,7 @@ const {
 } = require('../../db');
 const { autenticar, permitir } = require('../../middleware/auth');
 const { HttpError, validar, idParam } = require('../../utils/http');
+const { formatoCantidad } = require('../../utils/unidades');
 
 const router = Router();
 router.use(autenticar);
@@ -18,14 +19,19 @@ const TRANSICIONES = {
   RECHAZADO: [],
 };
 
+const COMENTARIO_POR_ESTADO = {
+  EN_PROCESO: 'Recibido por el almacén',
+  ATENDIDO: 'Entregado; el stock se descontó',
+};
+
 const esquemaCrear = z.object({
   area: z.string().trim().max(80).optional().nullable(),
   sucursalId: z.coerce.number().int().positive().optional().nullable(),
   observaciones: z.string().trim().max(500).optional().nullable(),
   productos: z.array(z.object({
     productoId: z.coerce.number().int().positive(),
-    cantidad: z.coerce.number().positive('La cantidad debe ser mayor a 0'),
-  })).min(1, 'El pedido debe incluir al menos un producto'),
+    cantidad: z.coerce.number().int('La cantidad debe ser un número entero').min(1, 'La cantidad mínima es 1'),
+  })).min(1, 'Agrega al menos un producto a la solicitud'),
 });
 
 const esquemaEstado = z.object({
@@ -33,13 +39,13 @@ const esquemaEstado = z.object({
   comentario: z.string().trim().max(300).optional().nullable(),
 });
 
-const usuarioCorto = (as) => ({ model: Usuario, as, attributes: ['id', 'nombre'] });
-const sucursalCorta = { model: Sucursal, as: 'sucursal', attributes: ['id', 'nombre'] };
-
-const incluirDetalle = [
-  { model: Usuario, as: 'solicitante', attributes: ['id', 'nombre', 'email'] },
-  sucursalCorta,
-  usuarioCorto('atendidoPor'),
+const incluirPedido = [
+  {
+    model: Usuario, as: 'solicitante', attributes: ['id', 'nombre', 'email', 'area'],
+    include: [{ model: Sucursal, as: 'sucursal', attributes: ['id', 'nombre'] }],
+  },
+  { model: Sucursal, as: 'sucursal', attributes: ['id', 'nombre'] },
+  { model: Usuario, as: 'atendidoPor', attributes: ['id', 'nombre'] },
   {
     model: DetallePedido, as: 'detalles',
     include: [{
@@ -48,7 +54,13 @@ const incluirDetalle = [
       include: [{ model: Categoria, as: 'categoria', attributes: ['nombre'] }],
     }],
   },
-  { model: HistorialEstado, as: 'historial', include: [usuarioCorto('usuario')] },
+  { model: HistorialEstado, as: 'historial', include: [{ model: Usuario, as: 'usuario', attributes: ['id', 'nombre'] }] },
+];
+
+const ordenInterno = [
+  [{ model: DetallePedido, as: 'detalles' }, 'id', 'ASC'],
+  [{ model: HistorialEstado, as: 'historial' }, 'fecha', 'ASC'],
+  [{ model: HistorialEstado, as: 'historial' }, 'id', 'ASC'],
 ];
 
 function esGestor(usuario) {
@@ -56,10 +68,7 @@ function esGestor(usuario) {
 }
 
 async function obtenerPedido(id, usuario) {
-  const pedido = await Pedido.findByPk(id, {
-    include: incluirDetalle,
-    order: [[{ model: DetallePedido, as: 'detalles' }, 'id', 'ASC'], [{ model: HistorialEstado, as: 'historial' }, 'fecha', 'ASC']],
-  });
+  const pedido = await Pedido.findByPk(id, { include: incluirPedido, order: ordenInterno });
   if (!pedido) throw new HttpError(404, 'Pedido no encontrado');
   if (!esGestor(usuario) && pedido.solicitanteId !== usuario.id) {
     throw new HttpError(403, 'No puedes ver pedidos de otros usuarios');
@@ -67,6 +76,7 @@ async function obtenerPedido(id, usuario) {
   return pedido;
 }
 
+// Lista con productos y bitácora: el empleado ve solo los suyos, el almacén todos
 router.get('/', async (req, res) => {
   const { estado, sucursalId, q } = req.query;
   const where = {};
@@ -76,17 +86,13 @@ router.get('/', async (req, res) => {
   if (q) {
     where[Op.or] = [
       { folio: { [Op.iLike]: `%${q}%` } },
-      { area: { [Op.iLike]: `%${q}%` } },
       { '$solicitante.nombre$': { [Op.iLike]: `%${q}%` } },
     ];
   }
   const pedidos = await Pedido.findAll({
     where,
-    include: [usuarioCorto('solicitante'), sucursalCorta],
-    attributes: {
-      include: [[sequelize.literal('(SELECT COUNT(*) FROM detalle_pedidos d WHERE d.pedido_id = "Pedido"."id")::int'), 'totalProductos']],
-    },
-    order: [['createdAt', 'DESC']],
+    include: incluirPedido,
+    order: [['createdAt', 'DESC'], ['id', 'DESC'], ...ordenInterno],
   });
   res.json(pedidos);
 });
@@ -104,32 +110,39 @@ router.post('/', async (req, res) => {
     cantidades.set(productoId, (cantidades.get(productoId) || 0) + cantidad);
   }
 
-  const encontrados = await Producto.count({
+  const productos = await Producto.findAll({
     where: { id: [...cantidades.keys()], activo: true, disponible: true },
   });
-  if (encontrados !== cantidades.size) {
+  if (productos.length !== cantidades.size) {
     throw new HttpError(400, 'Uno o más productos no existen o no están disponibles');
   }
+  // El empleado no puede pedir más de lo que hay en existencia
+  const excedidos = productos.filter((p) => cantidades.get(p.id) > Number(p.stockActual));
+  if (excedidos.length) {
+    throw new HttpError(409, excedidos
+      .map((p) => `Solo hay ${formatoCantidad(p.stockActual, p.unidadMedida)} de ${p.nombre} en existencia`)
+      .join('. '));
+  }
 
-  // El empleado siempre pide para su propia sucursal; almacén/admin pueden elegirla
+  // El empleado siempre pide para su propia sucursal; el almacén puede elegirla
   const sucursalId = esGestor(req.usuario) ? (datos.sucursalId ?? req.usuario.sucursalId) : req.usuario.sucursalId;
 
   const id = await sequelize.transaction(async (transaction) => {
     const pedido = await Pedido.create({
       folio: `TMP-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       area: datos.area ?? req.usuario.area,
-      observaciones: datos.observaciones,
+      observaciones: datos.observaciones || null,
       solicitanteId: req.usuario.id,
       sucursalId,
     }, { transaction });
 
-    await pedido.update({ folio: `SC-${new Date().getFullYear()}-${String(pedido.id).padStart(5, '0')}` }, { transaction });
+    await pedido.update({ folio: `PED-${String(pedido.id).padStart(4, '0')}` }, { transaction });
     await DetallePedido.bulkCreate(
       [...cantidades].map(([productoId, cantidad]) => ({ pedidoId: pedido.id, productoId, cantidad })),
       { transaction },
     );
     await HistorialEstado.create({
-      pedidoId: pedido.id, estadoNuevo: 'PENDIENTE', usuarioId: req.usuario.id, comentario: 'Pedido registrado',
+      pedidoId: pedido.id, estadoNuevo: 'PENDIENTE', usuarioId: req.usuario.id, comentario: 'Solicitud creada',
     }, { transaction });
     return pedido.id;
   });
@@ -137,36 +150,41 @@ router.post('/', async (req, res) => {
   res.status(201).json(await obtenerPedido(id, req.usuario));
 });
 
-// Cambio de estado por Almacén / Administración
+// Cambio de estado por el almacén
 router.patch('/:id/estado', permitir('ADMIN', 'ALMACEN'), async (req, res) => {
   const id = idParam(req);
   const { estado, comentario } = validar(esquemaEstado, req.body);
 
   await sequelize.transaction(async (transaction) => {
+    // Bloquea el pedido: si otra persona lo está cambiando, esta operación espera y luego valida
     const pedido = await Pedido.findByPk(id, { transaction, lock: transaction.LOCK.UPDATE });
     if (!pedido) throw new HttpError(404, 'Pedido no encontrado');
     if (!TRANSICIONES[pedido.estado].includes(estado)) {
-      throw new HttpError(409, `No se puede pasar de ${pedido.estado} a ${estado}`);
+      throw new HttpError(409, `El pedido ${pedido.folio} ya está ${pedido.estado.replace('_', ' ').toLowerCase()}; no se puede cambiar a ${estado.replace('_', ' ').toLowerCase()}`);
     }
-    if (estado === 'RECHAZADO' && !comentario) throw new HttpError(400, 'Indica el motivo del rechazo');
+    if (estado === 'RECHAZADO' && !comentario) throw new HttpError(400, 'Escribe el motivo del rechazo');
 
-    // Al marcar como ATENDIDO se descuenta el inventario
+    // Al marcar ATENDIDO se descuenta el inventario: todo o nada, en orden fijo por producto
     if (estado === 'ATENDIDO') {
-      const detalles = await DetallePedido.findAll({ where: { pedidoId: id }, transaction });
+      const detalles = await DetallePedido.findAll({ where: { pedidoId: id }, order: [['productoId', 'ASC']], transaction });
+      const faltantes = [];
       for (const d of detalles) {
         const producto = await Producto.findByPk(d.productoId, { transaction, lock: transaction.LOCK.UPDATE });
         const disponible = Number(producto.stockActual);
         const solicitado = Number(d.cantidad);
         if (disponible < solicitado) {
-          throw new HttpError(409, `Stock insuficiente de "${producto.nombre}": hay ${disponible} ${producto.unidadMedida} y se piden ${solicitado}`);
+          faltantes.push(`${producto.nombre}: hay ${formatoCantidad(disponible, producto.unidadMedida)} y se piden ${formatoCantidad(solicitado, producto.unidadMedida)}`);
+          continue;
         }
-        const stockFinal = Math.round((disponible - solicitado) * 100) / 100;
+        const stockFinal = disponible - solicitado;
         await producto.update({ stockActual: stockFinal }, { transaction });
         await Movimiento.create({
           productoId: producto.id, tipo: 'SALIDA', cantidad: solicitado, stockFinal,
           motivo: `Surtido del pedido ${pedido.folio}`, pedidoId: pedido.id, usuarioId: req.usuario.id,
         }, { transaction });
       }
+      // Si falta cualquier producto, la transacción se revierte y no se descuenta ninguno
+      if (faltantes.length) throw new HttpError(409, `Existencia insuficiente. ${faltantes.join('; ')}`);
     }
 
     const anterior = pedido.estado;
@@ -177,7 +195,8 @@ router.patch('/:id/estado', permitir('ADMIN', 'ALMACEN'), async (req, res) => {
       ...(estado === 'RECHAZADO' ? { motivoRechazo: comentario } : {}),
     }, { transaction });
     await HistorialEstado.create({
-      pedidoId: id, estadoAnterior: anterior, estadoNuevo: estado, comentario, usuarioId: req.usuario.id,
+      pedidoId: id, estadoAnterior: anterior, estadoNuevo: estado,
+      comentario: comentario || COMENTARIO_POR_ESTADO[estado], usuarioId: req.usuario.id,
     }, { transaction });
   });
 

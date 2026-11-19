@@ -2,9 +2,15 @@
 const CLAVE_TOKEN = 'sedecafe_token';
 
 export const sesion = {
-  obtener: () => localStorage.getItem(CLAVE_TOKEN),
-  guardar: (token) => localStorage.setItem(CLAVE_TOKEN, token),
-  borrar: () => localStorage.removeItem(CLAVE_TOKEN),
+  obtener: () => {
+    try { return localStorage.getItem(CLAVE_TOKEN); } catch { return null; }
+  },
+  guardar: (token) => {
+    try { localStorage.setItem(CLAVE_TOKEN, token); } catch { /* sin almacenamiento */ }
+  },
+  borrar: () => {
+    try { localStorage.removeItem(CLAVE_TOKEN); } catch { /* sin almacenamiento */ }
+  },
 };
 
 export class ApiError extends Error {
@@ -20,11 +26,16 @@ async function peticion(metodo, ruta, cuerpo) {
   const token = sesion.obtener();
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch(`/api${ruta}`, {
-    method: metodo,
-    headers,
-    body: cuerpo !== undefined ? JSON.stringify(cuerpo) : undefined,
-  });
+  let res;
+  try {
+    res = await fetch(`/api${ruta}`, {
+      method: metodo,
+      headers,
+      body: cuerpo !== undefined ? JSON.stringify(cuerpo) : undefined,
+    });
+  } catch {
+    throw new ApiError(0, { error: 'No hay conexión con el servidor. Revisa tu red e inténtalo de nuevo.' });
+  }
 
   const datos = await res.json().catch(() => null);
   if (res.status === 401 && token) {
@@ -49,7 +60,8 @@ export function qs(params) {
   return limpio.length ? `?${new URLSearchParams(limpio)}` : '';
 }
 
+// Mensaje legible para mostrar al usuario
 export function mensajeError(e) {
-  if (e?.detalles?.length) return `${e.message}: ${e.detalles.map((d) => `${d.campo} ${d.mensaje}`).join('; ')}`;
+  if (e?.detalles?.length) return e.detalles.map((d) => d.mensaje).join('. ');
   return e?.message || 'Ocurrió un error inesperado';
 }

@@ -1,60 +1,49 @@
 import { useEffect } from 'react';
+import { Coffee, X } from 'lucide-react';
+import { ESTADOS, fecha } from '../lib/formato';
 
-export const ETIQUETA_ESTADO = {
-  PENDIENTE: 'Pendiente',
-  EN_PROCESO: 'En proceso',
-  ATENDIDO: 'Atendido',
-  RECHAZADO: 'Rechazado',
-};
-
-const COLOR_ESTADO = {
-  PENDIENTE: 'bg-amber-100 text-amber-800',
-  EN_PROCESO: 'bg-sky-100 text-sky-800',
-  ATENDIDO: 'bg-emerald-100 text-emerald-800',
-  RECHAZADO: 'bg-red-100 text-red-700',
-};
-
-export const ETIQUETA_ROL = { ADMIN: 'Administración', ALMACEN: 'Almacén', EMPLEADO: 'Empleado / Sucursal' };
-export const ETIQUETA_TIPO = { PRODUCTO: 'Producto', INSUMO: 'Insumo', MATERIAL: 'Material' };
-
-export function EstadoBadge({ estado }) {
+export function Logo({ claro = false }) {
   return (
-    <span className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold ${COLOR_ESTADO[estado]}`}>
-      {ETIQUETA_ESTADO[estado]}
+    <span className="inline-flex items-center gap-2 text-sm font-semibold tracking-tight">
+      <span className={`flex size-7 items-center justify-center rounded-md ${claro ? 'bg-white text-neutral-900' : 'bg-neutral-900 text-white'}`}>
+        <Coffee className="size-4" strokeWidth={2.2} />
+      </span>
+      Sede Café
     </span>
   );
 }
 
-export function Badge({ children, color = 'bg-stone-100 text-stone-700' }) {
-  return <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${color}`}>{children}</span>;
+export function PuntoEstado({ estado, className = '' }) {
+  return <span className={`inline-block size-1.5 shrink-0 rounded-full ${ESTADOS[estado].punto} ${className}`} />;
 }
 
-export function Encabezado({ titulo, descripcion, children }) {
+export function EstadoBadge({ estado }) {
   return (
-    <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
-      <div>
-        <h1 className="text-2xl font-bold text-stone-800">{titulo}</h1>
-        {descripcion && <p className="mt-1 text-sm text-stone-500">{descripcion}</p>}
-      </div>
-      <div className="flex flex-wrap gap-2">{children}</div>
-    </div>
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-neutral-200 bg-white px-2 py-0.5 text-[11px] font-medium text-neutral-700">
+      <PuntoEstado estado={estado} />
+      {ESTADOS[estado].etiqueta}
+    </span>
   );
 }
 
-export function Alerta({ tipo = 'error', children, onCerrar }) {
-  if (!children) return null;
-  const estilos = tipo === 'error'
-    ? 'border-red-200 bg-red-50 text-red-700'
-    : 'border-emerald-200 bg-emerald-50 text-emerald-700';
+// Bitácora de estados como línea de tiempo
+export function Seguimiento({ historial }) {
   return (
-    <div className={`mb-4 flex items-start justify-between gap-3 rounded-lg border px-4 py-3 text-sm ${estilos}`}>
-      <span>{children}</span>
-      {onCerrar && <button type="button" onClick={onCerrar} className="font-bold opacity-60 hover:opacity-100">×</button>}
-    </div>
+    <ol className="relative ml-1 space-y-3 border-l border-neutral-200 pl-4">
+      {historial.map((h) => (
+        <li key={h.id} className="relative">
+          <span className={`absolute top-1 -left-[21px] size-2.5 rounded-full ring-2 ring-white ${ESTADOS[h.estadoNuevo].punto}`} />
+          <p className="text-[13px] font-medium text-neutral-900">{ESTADOS[h.estadoNuevo].etiqueta}</p>
+          <p className="text-[11px] text-neutral-500">{fecha(h.fecha)}</p>
+          {h.comentario && <p className="mt-0.5 text-xs text-neutral-700">{h.comentario}</p>}
+          {h.usuario && <p className="text-[11px] text-neutral-500">Por {h.usuario.nombre}</p>}
+        </li>
+      ))}
+    </ol>
   );
 }
 
-export function Modal({ abierto, titulo, onCerrar, children, ancho = 'max-w-lg' }) {
+export function Modal({ abierto, titulo, onCerrar, children, ancho = 'max-w-md' }) {
   useEffect(() => {
     if (!abierto) return undefined;
     const alPresionar = (e) => e.key === 'Escape' && onCerrar();
@@ -64,11 +53,13 @@ export function Modal({ abierto, titulo, onCerrar, children, ancho = 'max-w-lg' 
 
   if (!abierto) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 pt-16" onMouseDown={onCerrar}>
-      <div className={`card w-full ${ancho} p-6`} onMouseDown={(e) => e.stopPropagation()}>
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-stone-800">{titulo}</h2>
-          <button type="button" onClick={onCerrar} className="text-2xl leading-none text-stone-400 hover:text-stone-600">×</button>
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-neutral-900/50 p-4 pt-[12vh]" onMouseDown={onCerrar}>
+      <div role="dialog" aria-modal="true" aria-label={titulo} className={`w-full ${ancho} rounded-xl bg-white p-5 shadow-xl`} onMouseDown={(e) => e.stopPropagation()}>
+        <div className="mb-4 flex items-center justify-between gap-4">
+          <h2 className="text-[15px] font-semibold text-neutral-900">{titulo}</h2>
+          <button type="button" onClick={onCerrar} className="btn-icono -mr-1.5" aria-label="Cerrar">
+            <X className="size-4" />
+          </button>
         </div>
         {children}
       </div>
@@ -76,13 +67,27 @@ export function Modal({ abierto, titulo, onCerrar, children, ancho = 'max-w-lg' 
   );
 }
 
-export function Vacio({ children }) {
-  return <p className="px-3 py-10 text-center text-sm text-stone-400">{children}</p>;
+export function Encabezado({ titulo, descripcion, children }) {
+  return (
+    <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight text-neutral-900">{titulo}</h1>
+        {descripcion && <p className="mt-0.5 text-[13px] text-neutral-500">{descripcion}</p>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+export function Vacio({ children, className = '' }) {
+  return <p className={`rounded-lg bg-neutral-100 px-4 py-4 text-center text-[13px] text-neutral-500 ${className}`}>{children}</p>;
 }
 
 export function Cargando() {
-  return <p className="px-3 py-10 text-center text-sm text-stone-400">Cargando…</p>;
+  return <p className="px-4 py-10 text-center text-[13px] text-neutral-400">Cargando…</p>;
 }
 
-export const formatoFecha = (f) => (f ? new Date(f).toLocaleString('es-MX', { dateStyle: 'medium', timeStyle: 'short' }) : '—');
-export const formatoNumero = (n) => Number(n).toLocaleString('es-MX', { maximumFractionDigits: 2 });
+export function ErrorCaja({ children }) {
+  if (!children) return null;
+  return <p className="mb-4 rounded-lg bg-rose-50 px-3 py-2.5 text-[13px] text-rose-800">{children}</p>;
+}

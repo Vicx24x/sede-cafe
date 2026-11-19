@@ -4,27 +4,32 @@ const { Op, col, where: sqlWhere } = require('sequelize');
 const { sequelize, Producto, Categoria, Movimiento, Usuario, Pedido } = require('../../db');
 const { autenticar, permitir } = require('../../middleware/auth');
 const { HttpError, validar, idParam } = require('../../utils/http');
+const { UNIDADES } = require('../../utils/unidades');
 
 const router = Router();
 router.use(autenticar);
 
 const gestores = permitir('ADMIN', 'ALMACEN');
 
+const entero = (mensaje) => z.coerce.number({ error: mensaje }).int('Debe ser un número entero').min(0, 'No puede ser negativo');
+
 const esquema = z.object({
-  codigo: z.string().trim().toUpperCase().min(1).max(30),
-  nombre: z.string().trim().min(2).max(120),
+  codigo: z.string().trim().toUpperCase().min(1, 'El código es obligatorio').max(30),
+  nombre: z.string().trim().min(2, 'El nombre es obligatorio').max(120),
   descripcion: z.string().trim().max(300).optional().nullable(),
-  tipo: z.enum(['PRODUCTO', 'INSUMO', 'MATERIAL']),
-  unidadMedida: z.string().trim().min(1).max(20),
-  stockMinimo: z.coerce.number().min(0),
-  stockActual: z.coerce.number().min(0).optional(), // solo se usa al crear
-  categoriaId: z.coerce.number().int().positive(),
+  tipo: z.enum(['PRODUCTO', 'INSUMO', 'MATERIAL']).optional(),
+  unidadMedida: z.enum(UNIDADES, { error: 'Elige una unidad de la lista' }),
+  stockMinimo: entero('Indica el stock mínimo'),
+  stockActual: entero('Indica el stock actual').optional(),
+  // Se acepta el id de una categoría existente o el nombre (si no existe, se crea)
+  categoriaId: z.coerce.number().int().positive().optional(),
+  categoria: z.string().trim().min(2, 'Indica la categoría').max(80).optional(),
   disponible: z.boolean().optional(),
-});
+}).refine((d) => d.categoriaId || d.categoria, { message: 'Indica la categoría', path: ['categoria'] });
 
 const esquemaMovimiento = z.object({
   tipo: z.enum(['ENTRADA', 'AJUSTE']),
-  cantidad: z.coerce.number().min(0),
+  cantidad: entero('Indica la cantidad'),
   motivo: z.string().trim().max(200).optional().nullable(),
 });
 
@@ -39,16 +44,34 @@ async function buscar(id, transaction) {
   return producto;
 }
 
+async function resolverCategoria({ categoriaId, categoria }, transaction) {
+  if (categoriaId) return categoriaId;
+  const existente = await Categoria.findOne({
+    where: sqlWhere(sequelize.fn('lower', col('nombre')), categoria.toLowerCase()), transaction,
+  });
+  if (existente) {
+    if (!existente.activo) await existente.update({ activo: true }, { transaction });
+    return existente.id;
+  }
+  const nueva = await Categoria.create({ nombre: categoria }, { transaction });
+  return nueva.id;
+}
+
 router.get('/', async (req, res) => {
-  const { q, categoriaId, tipo, bajoStock, incluirInactivos, soloDisponibles } = req.query;
+  const { q, categoriaId, tipo, bajoStock, incluirInactivos, soloInactivos, soloDisponibles } = req.query;
   const filtros = [];
-  if (incluirInactivos !== 'true') filtros.push({ activo: true });
+  if (soloInactivos === 'true') filtros.push({ activo: false });
+  else if (incluirInactivos !== 'true') filtros.push({ activo: true });
   if (soloDisponibles === 'true') filtros.push({ disponible: true });
   if (categoriaId) filtros.push({ categoriaId: Number(categoriaId) });
   if (tipo) filtros.push({ tipo });
   if (bajoStock === 'true') filtros.push(condicionBajoStock);
   if (q) filtros.push({ [Op.or]: [{ nombre: { [Op.iLike]: `%${q}%` } }, { codigo: { [Op.iLike]: `%${q}%` } }] });
-  const productos = await Producto.findAll({ where: { [Op.and]: filtros }, include: incluir, order: [['nombre', 'ASC']] });
+  const productos = await Producto.findAll({
+    where: { [Op.and]: filtros },
+    include: incluir,
+    order: [[{ model: Categoria, as: 'categoria' }, 'nombre', 'ASC'], ['nombre', 'ASC']],
+  });
   res.json(productos);
 });
 
@@ -70,8 +93,9 @@ router.get('/:id/movimientos', gestores, async (req, res) => {
 });
 
 router.post('/', gestores, async (req, res) => {
-  const { stockActual = 0, ...datos } = validar(esquema, req.body);
+  const { stockActual = 0, categoria, ...datos } = validar(esquema, req.body);
   const id = await sequelize.transaction(async (transaction) => {
+    datos.categoriaId = await resolverCategoria({ categoriaId: datos.categoriaId, categoria }, transaction);
     const nuevo = await Producto.create({ ...datos, stockActual }, { transaction });
     if (stockActual > 0) {
       await Movimiento.create({
@@ -84,12 +108,24 @@ router.post('/', gestores, async (req, res) => {
   res.status(201).json(await buscar(id));
 });
 
-// La edición no cambia el stock: eso se hace con movimientos para dejar rastro
+// Editar: si cambia el stock actual, se registra un movimiento de ajuste para dejar rastro
 router.put('/:id', gestores, async (req, res) => {
-  const producto = await buscar(idParam(req));
-  const { stockActual, ...datos } = validar(esquema, req.body);
-  await producto.update(datos);
-  res.json(await buscar(producto.id));
+  const id = idParam(req);
+  const { stockActual, categoria, ...datos } = validar(esquema, req.body);
+  await sequelize.transaction(async (transaction) => {
+    const producto = await Producto.findByPk(id, { transaction, lock: transaction.LOCK.UPDATE });
+    if (!producto) throw new HttpError(404, 'Producto no encontrado');
+    datos.categoriaId = await resolverCategoria({ categoriaId: datos.categoriaId, categoria }, transaction);
+    if (stockActual !== undefined && stockActual !== Number(producto.stockActual)) {
+      datos.stockActual = stockActual;
+      await Movimiento.create({
+        productoId: id, tipo: 'AJUSTE', cantidad: stockActual, stockFinal: stockActual,
+        motivo: 'Ajuste desde la edición del producto', usuarioId: req.usuario.id,
+      }, { transaction });
+    }
+    await producto.update(datos, { transaction });
+  });
+  res.json(await buscar(id));
 });
 
 router.patch('/:id/disponibilidad', gestores, async (req, res) => {
@@ -98,13 +134,12 @@ router.patch('/:id/disponibilidad', gestores, async (req, res) => {
   res.json(await producto.update({ disponible }));
 });
 
-// Baja lógica
+// Baja lógica: el producto no se borra para conservar el historial de pedidos
 router.delete('/:id', gestores, async (req, res) => {
   const producto = await buscar(idParam(req));
   res.json(await producto.update({ activo: false, disponible: false }));
 });
 
-// Reactivar un producto dado de baja
 router.patch('/:id/reactivar', gestores, async (req, res) => {
   const producto = await buscar(idParam(req));
   res.json(await producto.update({ activo: true, disponible: true }));

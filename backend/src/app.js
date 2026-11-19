@@ -3,6 +3,7 @@ const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
+const helmet = require('helmet');
 const config = require('./config');
 const { sequelize } = require('./db');
 const { noEncontrado, manejadorErrores } = require('./middleware/errores');
@@ -11,6 +12,13 @@ const app = express();
 
 app.disable('x-powered-by');
 app.set('trust proxy', 1); // detrás de Nginx
+// Cabeceras de seguridad. Se quita "upgrade-insecure-requests" porque la VM se sirve por HTTP.
+app.use(helmet({
+  contentSecurityPolicy: { directives: { upgradeInsecureRequests: null } },
+  strictTransportSecurity: false,
+  crossOriginOpenerPolicy: false,
+  originAgentCluster: false,
+}));
 app.use(express.json({ limit: '1mb' }));
 app.use(morgan(config.nodeEnv === 'production' ? 'combined' : 'dev'));
 if (config.nodeEnv !== 'production') app.use(cors({ origin: config.corsOrigin }));

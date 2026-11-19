@@ -1,72 +1,152 @@
-// Datos de demostración: npm run db:seed
-// Es seguro ejecutarlo varias veces (no duplica registros).
+// Datos de demostración (los mismos del documento del proyecto): npm run db:seed
+// Es seguro ejecutarlo varias veces: no duplica usuarios, productos ni pedidos.
 const bcrypt = require('bcryptjs');
-const { sequelize, Sucursal, Usuario, Categoria, Producto, Movimiento } = require('../src/db');
+const {
+  sequelize, Sucursal, Usuario, Categoria, Producto, Pedido, DetallePedido, HistorialEstado, Movimiento,
+} = require('../src/db');
+
+const PRODUCTOS = [
+  // código, nombre, categoría, unidad, stock, mínimo
+  ['DES-001', 'Vaso 8 oz', 'Desechables', 'paquete', 40, 20],
+  ['DES-002', 'Vaso 12 oz', 'Desechables', 'paquete', 35, 20],
+  ['DES-003', 'Tapa para vaso 12 oz', 'Desechables', 'paquete', 30, 20],
+  ['DES-004', 'Popotes', 'Desechables', 'caja', 8, 4],
+  ['DES-005', 'Servilletas', 'Desechables', 'paquete', 60, 30],
+  ['GRA-001', 'Café en grano espresso', 'Grano', 'bolsa', 24, 10],
+  ['GRA-002', 'Café en grano para filtrado', 'Grano', 'bolsa', 18, 8],
+  ['GRA-003', 'Café descafeinado', 'Grano', 'bolsa', 6, 6],
+  ['JAR-001', 'Jarabe de vainilla', 'Jarabes', 'botella', 12, 6],
+  ['JAR-002', 'Jarabe de caramelo', 'Jarabes', 'botella', 9, 6],
+  ['JAR-003', 'Jarabe de avellana', 'Jarabes', 'botella', 2, 5],
+  ['LAC-001', 'Leche entera', 'Lácteos', 'litro', 120, 60],
+  ['LAC-002', 'Leche deslactosada', 'Lácteos', 'litro', 80, 40],
+  ['LAC-003', 'Leche de avena', 'Lácteos', 'litro', 3, 12],
+  ['LAC-004', 'Crema para batir', 'Lácteos', 'litro', 14, 8],
+  ['LIM-001', 'Detergente multiusos', 'Limpieza', 'litro', 10, 5],
+  ['LIM-002', 'Sanitizante', 'Limpieza', 'litro', 8, 4],
+  ['LIM-003', 'Bolsas para basura', 'Limpieza', 'paquete', 25, 10],
+  ['REP-001', 'Chocolate en polvo', 'Repostería', 'kilogramo', 15, 8],
+  ['REP-002', 'Azúcar', 'Repostería', 'kilogramo', 40, 20],
+];
+
+const horasAtras = (h) => new Date(Date.now() - h * 3600 * 1000);
 
 async function main() {
   await sequelize.sync();
-  const passwordHash = await bcrypt.hash('SedeCafe2026', 10);
 
   const sucursales = {};
-  for (const s of [
-    { nombre: 'Almacén Central', direccion: 'Matriz' },
-    { nombre: 'Sucursal Centro', direccion: 'Centro, CDMX' },
-    { nombre: 'Sucursal Norte', direccion: 'Zona Norte, CDMX' },
-  ]) {
-    const [suc] = await Sucursal.findOrCreate({ where: { nombre: s.nombre }, defaults: s });
-    sucursales[s.nombre] = suc.id;
+  for (const nombre of ['Sucursal 1', 'Sucursal 2']) {
+    const [s] = await Sucursal.findOrCreate({ where: { nombre }, defaults: { nombre } });
+    sucursales[nombre] = s.id;
   }
 
+  const usuarios = {};
   for (const u of [
-    { nombre: 'Administrador General', email: 'admin@sedecafe.com', rol: 'ADMIN', area: 'Administración', sucursal: 'Almacén Central' },
-    { nombre: 'Encargado de Almacén', email: 'almacen@sedecafe.com', rol: 'ALMACEN', area: 'Almacén', sucursal: 'Almacén Central' },
-    { nombre: 'Barista Centro', email: 'centro@sedecafe.com', rol: 'EMPLEADO', area: 'Barra', sucursal: 'Sucursal Centro' },
-    { nombre: 'Cocina Norte', email: 'norte@sedecafe.com', rol: 'EMPLEADO', area: 'Cocina', sucursal: 'Sucursal Norte' },
+    { clave: 'admin', nombre: 'Almacén Central', email: 'admin@sedecafe.com', rol: 'ADMIN', area: 'Almacén y Logística', password: 'Admin123!' },
+    { clave: 'ana', nombre: 'Ana Torres', email: 'empleado1@sedecafe.com', rol: 'EMPLEADO', sucursal: 'Sucursal 1', password: 'Empleado123!' },
+    { clave: 'luis', nombre: 'Luis Ramírez', email: 'empleado2@sedecafe.com', rol: 'EMPLEADO', sucursal: 'Sucursal 2', password: 'Empleado123!' },
   ]) {
-    const { sucursal, ...datos } = u;
-    await Usuario.findOrCreate({
+    const [usuario] = await Usuario.findOrCreate({
       where: { email: u.email },
-      defaults: { ...datos, passwordHash, sucursalId: sucursales[sucursal] },
+      defaults: {
+        nombre: u.nombre, email: u.email, rol: u.rol, area: u.area || null,
+        sucursalId: u.sucursal ? sucursales[u.sucursal] : null,
+        passwordHash: await bcrypt.hash(u.password, 10),
+      },
     });
+    usuarios[u.clave] = usuario;
   }
 
-  const categorias = {};
-  for (const c of [
-    { nombre: 'Café y té', descripcion: 'Granos, molidos y tés' },
-    { nombre: 'Lácteos', descripcion: 'Leches y cremas' },
-    { nombre: 'Panadería', descripcion: 'Pan y repostería' },
-    { nombre: 'Desechables', descripcion: 'Vasos, tapas, popotes, servilletas' },
-    { nombre: 'Limpieza', descripcion: 'Material de limpieza' },
-  ]) {
-    const [cat] = await Categoria.findOrCreate({ where: { nombre: c.nombre }, defaults: c });
-    categorias[c.nombre] = cat.id;
+  const productos = {};
+  for (const [codigo, nombre, categoria, unidadMedida, stock, minimo] of PRODUCTOS) {
+    const [cat] = await Categoria.findOrCreate({ where: { nombre: categoria }, defaults: { nombre: categoria } });
+    let p = await Producto.findOne({ where: { codigo } });
+    if (!p) {
+      p = await Producto.create({
+        codigo, nombre, unidadMedida, stockActual: stock, stockMinimo: minimo, categoriaId: cat.id,
+        tipo: ['Desechables', 'Limpieza'].includes(categoria) ? 'MATERIAL' : 'INSUMO',
+      });
+      await Movimiento.create({
+        productoId: p.id, tipo: 'ENTRADA', cantidad: stock, stockFinal: stock,
+        motivo: 'Existencia inicial', usuarioId: usuarios.admin.id, fecha: horasAtras(96),
+      });
+    }
+    productos[codigo] = p;
   }
 
-  const admin = await Usuario.findOne({ where: { email: 'admin@sedecafe.com' } });
-  const productos = [
-    ['CAF-001', 'Café en grano tostado medio', 'INSUMO', 'kg', 25, 10, 'Café y té'],
-    ['CAF-002', 'Café descafeinado molido', 'INSUMO', 'kg', 6, 3, 'Café y té'],
-    ['TE-001', 'Té chai concentrado', 'INSUMO', 'l', 4, 5, 'Café y té'],
-    ['LAC-001', 'Leche entera', 'INSUMO', 'l', 60, 20, 'Lácteos'],
-    ['LAC-002', 'Leche de almendra', 'INSUMO', 'l', 12, 8, 'Lácteos'],
-    ['PAN-001', 'Croissant de mantequilla', 'PRODUCTO', 'pza', 40, 15, 'Panadería'],
-    ['PAN-002', 'Muffin de arándano', 'PRODUCTO', 'pza', 10, 12, 'Panadería'],
-    ['DES-001', 'Vaso térmico 12 oz', 'MATERIAL', 'pza', 500, 200, 'Desechables'],
-    ['DES-002', 'Tapa para vaso 12 oz', 'MATERIAL', 'pza', 450, 200, 'Desechables'],
-    ['LIM-001', 'Desengrasante multiusos', 'MATERIAL', 'l', 8, 4, 'Limpieza'],
-  ];
-  for (const [codigo, nombre, tipo, unidadMedida, stock, minimo, cat] of productos) {
-    if (await Producto.findOne({ where: { codigo } })) continue;
-    const p = await Producto.create({
-      codigo, nombre, tipo, unidadMedida, stockActual: stock, stockMinimo: minimo, categoriaId: categorias[cat],
-    });
-    await Movimiento.create({
-      productoId: p.id, tipo: 'ENTRADA', cantidad: stock, stockFinal: stock, motivo: 'Existencia inicial', usuarioId: admin.id,
-    });
+  // Pedidos de ejemplo, solo si la base todavía no tiene pedidos
+  if ((await Pedido.count()) === 0) {
+    const { admin, ana, luis } = usuarios;
+    const ejemplos = [
+      { // PED-0001
+        solicitante: ana, sucursal: 'Sucursal 1', creado: horasAtras(26), observaciones: 'Para el turno de la tarde',
+        lineas: [['GRA-001', 4], ['DES-002', 6], ['DES-003', 6]],
+        historial: [],
+      },
+      { // PED-0002
+        solicitante: luis, sucursal: 'Sucursal 2', creado: horasAtras(44),
+        lineas: [['LAC-001', 12], ['JAR-001', 2]],
+        historial: [{ estado: 'EN_PROCESO', horas: 40, comentario: 'Recibido por el almacén' }],
+      },
+      { // PED-0003
+        solicitante: ana, sucursal: 'Sucursal 1', creado: horasAtras(70),
+        lineas: [['DES-005', 5]],
+        historial: [
+          { estado: 'EN_PROCESO', horas: 69, comentario: 'Recibido por el almacén' },
+          { estado: 'ATENDIDO', horas: 68, comentario: 'Entregado; el stock se descontó' },
+        ],
+      },
+      { // PED-0004
+        solicitante: luis, sucursal: 'Sucursal 2', creado: horasAtras(50),
+        lineas: [['JAR-003', 10]],
+        historial: [{ estado: 'RECHAZADO', horas: 48, comentario: 'No hay existencias suficientes; se surte el viernes.' }],
+      },
+    ];
+
+    for (const e of ejemplos) {
+      await sequelize.transaction(async (transaction) => {
+        const final = e.historial.at(-1)?.estado ?? 'PENDIENTE';
+        const pedido = await Pedido.create({
+          folio: `TMP-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, estado: final, observaciones: e.observaciones || null,
+          solicitanteId: e.solicitante.id, sucursalId: sucursales[e.sucursal],
+          atendidoPorId: e.historial.length ? admin.id : null,
+          fechaAtencion: final === 'ATENDIDO' ? horasAtras(e.historial.at(-1).horas) : null,
+          motivoRechazo: final === 'RECHAZADO' ? e.historial.at(-1).comentario : null,
+          createdAt: e.creado,
+        }, { transaction });
+        await pedido.update({ folio: `PED-${String(pedido.id).padStart(4, '0')}` }, { transaction, silent: true });
+        await DetallePedido.bulkCreate(
+          e.lineas.map(([codigo, cantidad]) => ({ pedidoId: pedido.id, productoId: productos[codigo].id, cantidad })),
+          { transaction },
+        );
+        await HistorialEstado.create({
+          pedidoId: pedido.id, estadoNuevo: 'PENDIENTE', comentario: 'Solicitud creada', usuarioId: e.solicitante.id, fecha: e.creado,
+        }, { transaction });
+        let anterior = 'PENDIENTE';
+        for (const h of e.historial) {
+          await HistorialEstado.create({
+            pedidoId: pedido.id, estadoAnterior: anterior, estadoNuevo: h.estado, comentario: h.comentario,
+            usuarioId: admin.id, fecha: horasAtras(h.horas),
+          }, { transaction });
+          anterior = h.estado;
+        }
+        // El pedido atendido ya está reflejado en la existencia inicial; solo se deja el movimiento
+        if (final === 'ATENDIDO') {
+          for (const [codigo, cantidad] of e.lineas) {
+            await Movimiento.create({
+              productoId: productos[codigo].id, tipo: 'SALIDA', cantidad, stockFinal: productos[codigo].stockActual,
+              motivo: `Surtido del pedido ${pedido.folio}`, pedidoId: pedido.id, usuarioId: admin.id,
+              fecha: horasAtras(e.historial.at(-1).horas),
+            }, { transaction });
+          }
+        }
+      });
+    }
   }
 
   console.log('Datos de demostración cargados.');
-  console.log('Usuarios (contraseña SedeCafe2026): admin@sedecafe.com, almacen@sedecafe.com, centro@sedecafe.com, norte@sedecafe.com');
+  console.log('Almacén: admin@sedecafe.com / Admin123!');
+  console.log('Empleados: empleado1@sedecafe.com y empleado2@sedecafe.com / Empleado123!');
 }
 
 main()
