@@ -1,0 +1,18 @@
+{
+  "name": "sede-cafe",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sistema Informático para el Registro, Control de Productos y Gestión de Pedidos Internos de Sede Café",
+  "scripts": {
+    "instalar": "npm ci --prefix backend && npm ci --prefix frontend",
+    "build": "npm run build --prefix frontend",
+    "start": "npm start --prefix backend",
+    "db:init": "npm run db:init --prefix backend",
+    "db:seed": "npm run db:seed --prefix backend",
+    "dev:backend": "npm run dev --prefix backend",
+    "dev:frontend": "npm run dev --prefix frontend"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
